@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAppByClientId } from '@/lib/services/firestore-service';
+import { createAuthorizationCode } from '@/lib/auth/jwt';
 
 export const runtime = 'nodejs';
 
@@ -103,10 +104,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(consentUrl.toString());
   }
 
-  // Generate random authorization code
-  const code = 'sso_code_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  // Generate cryptographically signed stateless authorization code (valid across all serverless isolates)
+  const code = await createAuthorizationCode({
+    clientId,
+    userId,
+    userEmail: userEmail || '',
+    userName: userName || 'User',
+    userRole: userRole || 'Member',
+    redirectUri,
+  });
 
-  // Store authorization code (10 minutes validity)
+  // Also store in memory for same-isolate fallback
   codeStore.set(code, {
     code,
     clientId,
