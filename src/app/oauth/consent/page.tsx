@@ -103,8 +103,8 @@ function ConsentContent() {
     authorizeUrl.searchParams.set('user_name', userProfile.displayName);
     authorizeUrl.searchParams.set('user_role', userProfile.role);
 
-    // If opened in popup mode, communicate via postMessage and close
-    if (isPopup && typeof window !== 'undefined' && window.opener) {
+    // If client explicitly requested web_message postMessage mode without redirect
+    if (searchParams.get('response_mode') === 'web_message' && typeof window !== 'undefined' && window.opener) {
       try {
         authorizeUrl.searchParams.set('response_mode', 'json');
         const res = await fetch(authorizeUrl.toString(), {
@@ -131,12 +131,12 @@ function ConsentContent() {
       }
     }
 
-    // Standard redirect fallback
+    // Standard OAuth 2.0 flow: navigate to authorize endpoint which redirects to client redirect_uri
     window.location.href = authorizeUrl.toString();
   };
 
   const handleDeny = () => {
-    if (isPopup && typeof window !== 'undefined' && window.opener) {
+    if (searchParams.get('response_mode') === 'web_message' && typeof window !== 'undefined' && window.opener) {
       window.opener.postMessage(
         {
           type: 'TEN_SSO_AUTH_ERROR',
