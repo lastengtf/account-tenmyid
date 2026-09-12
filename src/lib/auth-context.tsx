@@ -90,29 +90,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             emailVerified: parsed.emailVerified,
           } as unknown as FirebaseUser);
         } else {
-          // Default session for ease of testing: Superadmin
-          const defaultAdmin: SSOUser = {
-            uid: 'usr_admin_root',
-            username: 'admin',
-            email: 'admin@ten.my.id',
-            displayName: 'Administrator TEN',
-            role: 'Superadmin',
-            status: 'active',
-            emailVerified: true,
-            company: 'TEN-MY-ID Non-Profit',
-            title: 'Head of Infrastructure',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLoginAt: new Date().toISOString(),
-          };
-          setUserProfile(defaultAdmin);
-          setUser({
-            uid: defaultAdmin.uid,
-            email: defaultAdmin.email,
-            displayName: defaultAdmin.displayName,
-            emailVerified: true,
-          } as unknown as FirebaseUser);
-          localStorage.setItem(LOCAL_USER_SESSION, JSON.stringify(defaultAdmin));
+          setUserProfile(null);
+          setUser(null);
         }
       } catch (err) {
         console.warn('Session load warning:', err);

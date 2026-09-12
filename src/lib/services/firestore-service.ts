@@ -195,22 +195,49 @@ export async function getUserProfile(identifier: string): Promise<SSOUser | null
         return querySnap.docs[0].data() as SSOUser;
       }
     } catch (e) {
-      console.warn('Firestore getUserProfile direct lookup failed, fallback to all users', e);
+      console.error('[SSO Firestore] getUserProfile failed:', e);
+    }
+
+    if (isFirebaseConfigured()) {
+      return null;
     }
   }
 
-  // Check all users for match by UID or username
-  const users = await listAllUsers();
-  return (
-    users.find(
-      (u) => u.uid === decoded || (u.username && u.username.toLowerCase() === clean)
-    ) || null
-  );
+  // Offline development fallback only when Firebase is NOT configured
+  if (!isFirebaseConfigured()) {
+    const users = getLocalItem<SSOUser[]>('users', []);
+    return (
+      users.find(
+        (u) => u.uid === decoded || (u.username && u.username.toLowerCase() === clean)
+      ) || null
+    );
+  }
+
+  return null;
 }
 
 export async function isUsernameAvailable(username: string, excludeUid?: string): Promise<boolean> {
   const clean = username.replace(/^@/, '').toLowerCase().trim();
-  const users = await listAllUsers();
+
+  const f = await getFirestoreModule();
+  if (f) {
+    try {
+      const { fs, db } = f;
+      const q = fs.query(fs.collection(db, 'users'), fs.where('username', '==', clean), fs.limit(2));
+      const querySnap = await fs.getDocs(q);
+      if (querySnap.empty) return true;
+      const matches = querySnap.docs.map(d => d.data() as SSOUser);
+      return matches.every(u => u.uid === excludeUid);
+    } catch (e) {
+      console.error('[SSO Firestore] isUsernameAvailable failed:', e);
+    }
+
+    if (isFirebaseConfigured()) {
+      return true;
+    }
+  }
+
+  const users = getLocalItem<SSOUser[]>('users', []);
   const existing = users.find(
     (u) => u.username && u.username.toLowerCase() === clean && u.uid !== excludeUid
   );
@@ -250,61 +277,19 @@ export async function listAllUsers(): Promise<SSOUser[]> {
     try {
       const { fs, db } = f;
       const snap = await fs.getDocs(fs.collection(db, 'users'));
-      if (!snap.empty) {
-        return snap.docs.map(d => d.data() as SSOUser);
-      }
+      return snap.docs.map(d => d.data() as SSOUser);
     } catch (e) {
-      console.warn('Firestore listAllUsers failed, falling back to local store', e);
+      console.error('[SSO Firestore] listAllUsers failed:', e);
+      return [];
     }
   }
 
-  let users = getLocalItem<SSOUser[]>('users', []);
-  if (users.length === 0 || !users[0]?.username) {
-    // Seed default admin user for initial view with unique usernames
-    users = [
-      {
-        uid: 'usr_admin_root',
-        username: 'admin',
-        email: 'admin@ten.my.id',
-        displayName: 'Administrator TEN',
-        role: 'Superadmin',
-        roleId: 'role-superadmin',
-        status: 'active',
-        emailVerified: true,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-        lastLoginAt: new Date().toISOString(),
-      },
-      {
-        uid: 'usr_budi_santoso',
-        username: 'budisantoso',
-        email: 'budi@ten.my.id',
-        displayName: 'Budi Santoso',
-        role: 'Admin',
-        roleId: 'role-admin',
-        status: 'active',
-        emailVerified: true,
-        createdAt: '2026-02-15T08:30:00.000Z',
-        updatedAt: '2026-02-15T08:30:00.000Z',
-        lastLoginAt: '2026-03-10T14:20:00.000Z',
-      },
-      {
-        uid: 'usr_siti_rahma',
-        username: 'sitirahma',
-        email: 'siti@ten.my.id',
-        displayName: 'Siti Rahma',
-        role: 'Member',
-        roleId: 'role-member',
-        status: 'active',
-        emailVerified: true,
-        createdAt: '2026-03-01T11:00:00.000Z',
-        updatedAt: '2026-03-01T11:00:00.000Z',
-        lastLoginAt: '2026-03-11T09:15:00.000Z',
-      }
-    ];
-    setLocalItem('users', users);
+  // If Firebase is configured, strictly do NOT return dummy users
+  if (isFirebaseConfigured()) {
+    return [];
   }
-  return users;
+
+  return getLocalItem<SSOUser[]>('users', []);
 }
 
 export async function deleteUserProfile(uid: string): Promise<void> {
@@ -315,11 +300,11 @@ export async function deleteUserProfile(uid: string): Promise<void> {
       await fs.deleteDoc(fs.doc(db, 'users', uid));
       return;
     } catch (e) {
-      console.warn('Firestore deleteUserProfile fallback', e);
+      console.error('[SSO Firestore] deleteUserProfile failed:', e);
     }
   }
 
-  const users = await listAllUsers();
+  const users = getLocalItem<SSOUser[]>('users', []);
   const filtered = users.filter(u => u.uid !== uid);
   setLocalItem('users', filtered);
 }
@@ -501,20 +486,42 @@ export async function listRegisteredApps(): Promise<RegisteredApp[]> {
     try {
       const { fs, db } = f;
       const snap = await fs.getDocs(fs.collection(db, 'apps'));
-      if (!snap.empty) {
-        return snap.docs.map(d => d.data() as RegisteredApp);
-      }
+      return snap.docs.map(d => d.data() as RegisteredApp);
     } catch (e) {
-      console.warn('Firestore listRegisteredApps fallback', e);
+      console.error('[SSO Firestore] listRegisteredApps error:', e);
+      if (isFirebaseConfigured()) {
+        return [];
+      }
     }
   }
 
+  if (isFirebaseConfigured()) {
+    return [];
+  }
+
   const apps = getLocalItem<RegisteredApp[]>('apps', defaultApps);
-  setLocalItem('apps', apps);
   return apps;
 }
 
 export async function getAppByClientId(clientId: string): Promise<RegisteredApp | null> {
+  const f = await getFirestoreModule();
+  if (f) {
+    try {
+      const { fs, db } = f;
+      const q = fs.query(fs.collection(db, 'apps'), fs.where('clientId', '==', clientId), fs.limit(1));
+      const snap = await fs.getDocs(q);
+      if (!snap.empty) {
+        const app = snap.docs[0].data() as RegisteredApp;
+        return app.isActive ? app : null;
+      }
+    } catch (e) {
+      console.error('[SSO Firestore] getAppByClientId error:', e);
+    }
+    if (isFirebaseConfigured()) {
+      return null;
+    }
+  }
+
   const apps = await listRegisteredApps();
   return apps.find(a => a.clientId === clientId && a.isActive) || null;
 }
@@ -636,12 +643,17 @@ export async function getRecentAuditLogs(count: number = 20): Promise<SSOAuditLo
       const { fs, db } = f;
       const q = fs.query(fs.collection(db, 'audit_logs'), fs.orderBy('timestamp', 'desc'), fs.limit(count));
       const snap = await fs.getDocs(q);
-      if (!snap.empty) {
-        return snap.docs.map(d => d.data() as SSOAuditLog);
-      }
+      return snap.docs.map(d => d.data() as SSOAuditLog);
     } catch (e) {
-      console.warn('Firestore getRecentAuditLogs fallback', e);
+      console.error('[SSO Firestore] getRecentAuditLogs error:', e);
+      if (isFirebaseConfigured()) {
+        return [];
+      }
     }
+  }
+
+  if (isFirebaseConfigured()) {
+    return [];
   }
 
   const logs = getLocalItem<SSOAuditLog[]>('audit_logs', []);

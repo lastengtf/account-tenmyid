@@ -47,17 +47,17 @@ export async function POST(request: NextRequest) {
 
     // Verify code
     const storedCode = consumeStoredAuthCode(code);
-    if (!storedCode && !code.startsWith('sso_code_')) {
+    if (!storedCode) {
       return NextResponse.json(
         { error: 'invalid_grant', error_description: 'Authorization code is invalid or has expired' },
         { status: 400 }
       );
     }
 
-    const uid = storedCode?.userId || 'usr_admin_root';
-    const email = storedCode?.userEmail || 'admin@ten.my.id';
-    const displayName = storedCode?.userName || 'Administrator TEN';
-    const role = storedCode?.userRole || 'Superadmin';
+    const uid = storedCode.userId;
+    const email = storedCode.userEmail;
+    const displayName = storedCode.userName;
+    const role = storedCode.userRole;
 
     // Generate JWT Access Token
     const accessToken = await createSSOAccessToken({

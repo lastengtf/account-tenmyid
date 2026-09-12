@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
   const userName = searchParams.get('user_name');
   const userRole = searchParams.get('user_role');
 
-  if (consentApproved !== 'true') {
+  if (consentApproved !== 'true' || !userId) {
     // Redirect browser to interactive Consent Screen
     const consentUrl = new URL('/oauth/consent', request.url);
     searchParams.forEach((val, key) => consentUrl.searchParams.set(key, val));
@@ -110,10 +110,10 @@ export async function GET(request: NextRequest) {
   codeStore.set(code, {
     code,
     clientId,
-    userId: userId || 'usr_admin_root',
-    userEmail: userEmail || 'admin@ten.my.id',
-    userName: userName || 'Administrator TEN',
-    userRole: userRole || 'Superadmin',
+    userId,
+    userEmail: userEmail || '',
+    userName: userName || 'User',
+    userRole: userRole || 'Member',
     redirectUri,
     expiresAt: Date.now() + 10 * 60 * 1000,
   });
