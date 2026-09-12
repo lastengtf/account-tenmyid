@@ -25,6 +25,79 @@ function cleanData<T extends Record<string, unknown>>(data: T): Record<string, u
 
 let _cachedDb: Firestore | null = null;
 
+// Convert Firestore REST typed value object to plain JavaScript primitive/object
+function parseFirestoreValue(valueObj: any): any {
+  if (!valueObj || typeof valueObj !== 'object') return valueObj;
+  if ('stringValue' in valueObj) return valueObj.stringValue;
+  if ('booleanValue' in valueObj) return valueObj.booleanValue;
+  if ('integerValue' in valueObj) return Number(valueObj.integerValue);
+  if ('doubleValue' in valueObj) return Number(valueObj.doubleValue);
+  if ('timestampValue' in valueObj) return valueObj.timestampValue;
+  if ('nullValue' in valueObj) return null;
+  if ('arrayValue' in valueObj) {
+    const values = valueObj.arrayValue?.values || [];
+    return values.map(parseFirestoreValue);
+  }
+  if ('mapValue' in valueObj) {
+    const fields = valueObj.mapValue?.fields || {};
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      res[k] = parseFirestoreValue(v);
+    }
+    return res;
+  }
+  return valueObj;
+}
+
+function parseFirestoreDoc<T>(doc: any): T {
+  const fields = doc.fields || {};
+  const res: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    res[k] = parseFirestoreValue(v);
+  }
+  return res as T;
+}
+
+// Server-side direct Firestore REST helper (100% compatible with Cloudflare Workers isolate)
+async function fetchFirestoreCollectionREST<T>(collectionName: string): Promise<T[]> {
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!projectId || !apiKey) return [];
+
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}?key=${apiKey}&pageSize=100`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 404) return [];
+      console.warn(`[Server Firestore REST] GET ${collectionName} returned ${res.status}`);
+      return [];
+    }
+    const json: any = await res.json();
+    const documents = json.documents || [];
+    return documents.map((doc: any) => parseFirestoreDoc<T>(doc));
+  } catch (err) {
+    console.error(`[Server Firestore REST] Error fetching ${collectionName}:`, err);
+    return [];
+  }
+}
+
+async function fetchFirestoreDocREST<T>(collectionName: string, docId: string): Promise<T | null> {
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!projectId || !apiKey) return null;
+
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${encodeURIComponent(docId)}?key=${apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const json: any = await res.json();
+    return parseFirestoreDoc<T>(json);
+  } catch (err) {
+    console.error(`[Server Firestore REST] Error fetching ${collectionName}/${docId}:`, err);
+    return null;
+  }
+}
+
 // Lazy loader for Firestore to ensure zero eval/codegen errors in Cloudflare Workers workerd runtime
 async function getFirestoreModule() {
   if (typeof window === 'undefined' || !isFirebaseConfigured()) {
@@ -177,6 +250,16 @@ export async function getUserProfile(identifier: string): Promise<SSOUser | null
   const decoded = decodeURIComponent(identifier || '');
   const clean = decoded.replace(/^@/, '').toLowerCase().trim();
 
+  if (typeof window === 'undefined') {
+    if (isFirebaseConfigured()) {
+      const doc = await fetchFirestoreDocREST<SSOUser>('users', decoded);
+      if (doc) return doc;
+      const allUsers = await fetchFirestoreCollectionREST<SSOUser>('users');
+      return allUsers.find(u => u.uid === decoded || (u.username && u.username.toLowerCase() === clean)) || null;
+    }
+    return null;
+  }
+
   const f = await getFirestoreModule();
   if (f) {
     try {
@@ -272,6 +355,13 @@ export async function saveUserProfile(user: SSOUser): Promise<void> {
 }
 
 export async function listAllUsers(): Promise<SSOUser[]> {
+  if (typeof window === 'undefined') {
+    if (isFirebaseConfigured()) {
+      return await fetchFirestoreCollectionREST<SSOUser>('users');
+    }
+    return [];
+  }
+
   const f = await getFirestoreModule();
   if (f) {
     try {
@@ -481,6 +571,13 @@ export async function deletePermission(permId: string): Promise<void> {
 // REGISTERED OAUTH APPS REPOSITORY
 // ----------------------------------------------------
 export async function listRegisteredApps(): Promise<RegisteredApp[]> {
+  if (typeof window === 'undefined') {
+    if (isFirebaseConfigured()) {
+      return await fetchFirestoreCollectionREST<RegisteredApp>('apps');
+    }
+    return defaultApps;
+  }
+
   const f = await getFirestoreModule();
   if (f) {
     try {
@@ -504,6 +601,14 @@ export async function listRegisteredApps(): Promise<RegisteredApp[]> {
 }
 
 export async function getAppByClientId(clientId: string): Promise<RegisteredApp | null> {
+  if (typeof window === 'undefined') {
+    if (isFirebaseConfigured()) {
+      const apps = await fetchFirestoreCollectionREST<RegisteredApp>('apps');
+      return apps.find(a => a.clientId === clientId && a.isActive) || null;
+    }
+    return defaultApps.find(a => a.clientId === clientId && a.isActive) || null;
+  }
+
   const f = await getFirestoreModule();
   if (f) {
     try {
