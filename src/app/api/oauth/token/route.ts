@@ -10,19 +10,67 @@ import { consumeStoredAuthCode } from '../authorize/route';
 
 export const runtime = 'nodejs';
 
+function getCorsHeaders(request: NextRequest): Record<string, string> {
+  const origin = request.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: getCorsHeaders(request),
+  });
+}
+
 export async function POST(request: NextRequest) {
+  const corsHeaders = getCorsHeaders(request);
+
   try {
     let body: Record<string, string> = {};
     const contentType = request.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {
-      body = await request.json();
-    } else if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      formData.forEach((val, key) => {
-        body[key] = val.toString();
-      });
+      try {
+        body = await request.json();
+      } catch (err) {
+        console.warn('Failed to parse JSON body:', err);
+      }
+    } else if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+      try {
+        const formData = await request.formData();
+        formData.forEach((val, key) => {
+          body[key] = val.toString();
+        });
+      } catch (err) {
+        console.warn('Failed to parse form data:', err);
+      }
+    } else {
+      // Fallback: try raw text
+      try {
+        const rawText = await request.text();
+        if (rawText) {
+          try {
+            body = JSON.parse(rawText);
+          } catch {
+            const params = new URLSearchParams(rawText);
+            params.forEach((val, key) => {
+              body[key] = val;
+            });
+          }
+        }
+      } catch {}
     }
+
+    // Also extract from query parameters just in case client sent via GET-style query
+    const { searchParams } = new URL(request.url);
+    searchParams.forEach((val, key) => {
+      if (!body[key]) body[key] = val;
+    });
 
     let { grant_type, code, client_id, client_secret, redirect_uri } = body;
 
@@ -42,7 +90,7 @@ export async function POST(request: NextRequest) {
     if (!client_id || !code) {
       return NextResponse.json(
         { error: 'invalid_request', error_description: 'client_id and code are required' },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -51,15 +99,15 @@ export async function POST(request: NextRequest) {
     if (!app) {
       return NextResponse.json(
         { error: 'invalid_client', error_description: 'Registered app not found or inactive' },
-        { status: 401 }
+        { status: 401, headers: corsHeaders }
       );
     }
 
-    // Validate client secret if provided
-    if (client_secret && app.clientSecret !== client_secret) {
+    // Validate client secret if configured on the registered app
+    if (app.clientSecret && client_secret && app.clientSecret.trim() !== client_secret.trim()) {
       return NextResponse.json(
         { error: 'invalid_client', error_description: 'Invalid client_secret' },
-        { status: 401 }
+        { status: 401, headers: corsHeaders }
       );
     }
 
@@ -73,7 +121,7 @@ export async function POST(request: NextRequest) {
         userEmail: 'demo@ten.my.id',
         userName: 'Developer Demo User',
         userRole: 'Member',
-        redirectUri: redirect_uri || 'https://finance.ten.my.id/oauth/callback',
+        redirectUri: redirect_uri || 'https://task.ten.my.id/auth/callback',
       };
     }
 
@@ -100,7 +148,7 @@ export async function POST(request: NextRequest) {
     if (!authData) {
       return NextResponse.json(
         { error: 'invalid_grant', error_description: 'Authorization code is invalid or has expired' },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -130,29 +178,42 @@ export async function POST(request: NextRequest) {
       createSSOIdToken(tokenPayload, '24h'),
     ]);
 
-    return NextResponse.json({
-      access_token: accessToken,
-      id_token: idToken,
-      token_type: 'Bearer',
-      expires_in: 86400, // 24 hours
-      scope: 'openid profile email',
-      user: {
-        sub: uid,
-        uid,
-        email,
-        displayName,
-        username,
-        role: userProfile?.role || role,
-        status: userProfile?.status || 'active',
-        company: userProfile?.company || '',
-        title: userProfile?.title || '',
+    const userPayload = {
+      sub: uid,
+      id: uid,
+      uid,
+      email,
+      name: displayName,
+      displayName,
+      preferred_username: username,
+      username,
+      role: userProfile?.role || role,
+      status: userProfile?.status || 'active',
+      company: userProfile?.company || '',
+      title: userProfile?.title || '',
+    };
+
+    return NextResponse.json(
+      {
+        access_token: accessToken,
+        token: accessToken,
+        id_token: idToken,
+        token_type: 'Bearer',
+        expires_in: 86400, // 24 hours
+        scope: 'openid profile email',
+        user: userPayload,
+        data: userPayload,
+      },
+      {
+        status: 200,
+        headers: corsHeaders,
       }
-    });
+    );
   } catch (error) {
     console.error('OAuth token exchange error:', error);
     return NextResponse.json(
       { error: 'server_error', error_description: 'Internal SSO token exchange failure' },
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     );
   }
 }

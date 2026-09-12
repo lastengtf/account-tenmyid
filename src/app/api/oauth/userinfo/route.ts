@@ -4,7 +4,25 @@ import { getUserProfile } from '@/lib/services/firestore-service';
 
 export const runtime = 'nodejs';
 
+function getCorsHeaders(request: NextRequest): Record<string, string> {
+  const origin = request.headers.get('origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: getCorsHeaders(request),
+  });
+}
+
 async function handleUserInfo(request: NextRequest) {
+  const corsHeaders = getCorsHeaders(request);
   let token: string | null = null;
 
   // 1. Authorization: Bearer <token>
@@ -22,7 +40,7 @@ async function handleUserInfo(request: NextRequest) {
   if (!token) {
     return NextResponse.json(
       { error: 'unauthorized', error_description: 'Bearer access token is missing or malformed' },
-      { status: 401 }
+      { status: 401, headers: corsHeaders }
     );
   }
 
@@ -31,7 +49,7 @@ async function handleUserInfo(request: NextRequest) {
   if (!payload) {
     return NextResponse.json(
       { error: 'invalid_token', error_description: 'The access token is invalid or expired' },
-      { status: 401 }
+      { status: 401, headers: corsHeaders }
     );
   }
 
@@ -44,10 +62,10 @@ async function handleUserInfo(request: NextRequest) {
   const emailVerified = userProfile?.emailVerified ?? true;
 
   // Standard OpenID Connect (OIDC) + TEN Profile claims
-  return NextResponse.json({
+  const userData = {
     sub: payload.uid,
-    uid: payload.uid,
     id: payload.uid,
+    uid: payload.uid,
     name: displayName,
     displayName: displayName,
     preferred_username: username,
@@ -60,6 +78,11 @@ async function handleUserInfo(request: NextRequest) {
     company: userProfile?.company || '',
     title: userProfile?.title || '',
     aud: payload.clientId,
+  };
+
+  return NextResponse.json(userData, {
+    status: 200,
+    headers: corsHeaders,
   });
 }
 
