@@ -39,20 +39,11 @@ export function getFirebaseAuth(): Auth {
   return _auth;
 }
 
+export function setFirebaseDb(dbInstance: Firestore | undefined) {
+  _db = dbInstance;
+}
+
 export function getFirebaseDb(): Firestore | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  if (!_db) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getFirestore } = require('firebase/firestore');
-      _db = getFirestore(getFirebaseApp());
-    } catch (err) {
-      console.warn('Failed to load firestore on client:', err);
-      return null;
-    }
-  }
   return _db || null;
 }
 

@@ -1,4 +1,5 @@
-import { getFirebaseDb, isFirebaseConfigured } from '@/lib/firebase/client';
+import { getFirebaseApp, getFirebaseDb, setFirebaseDb, isFirebaseConfigured } from '@/lib/firebase/client';
+import type { Firestore } from 'firebase/firestore';
 import { 
   SSOUser, 
   SSORole, 
@@ -11,6 +12,19 @@ import {
 // In-Memory & LocalStorage Cache fallback for zero-config offline or dev testing
 const LOCAL_STORAGE_KEY_PREFIX = 'sso_ten_';
 
+// Helper to remove undefined properties before sending to Firestore
+function cleanData<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v !== undefined) {
+      clean[k] = v;
+    }
+  }
+  return clean;
+}
+
+let _cachedDb: Firestore | null = null;
+
 // Lazy loader for Firestore to ensure zero eval/codegen errors in Cloudflare Workers workerd runtime
 async function getFirestoreModule() {
   if (typeof window === 'undefined' || !isFirebaseConfigured()) {
@@ -18,11 +32,20 @@ async function getFirestoreModule() {
   }
   try {
     const fs = await import('firebase/firestore');
-    const db = getFirebaseDb();
-    if (!db) return null;
-    return { fs, db };
+    if (!_cachedDb) {
+      const app = getFirebaseApp();
+      try {
+        _cachedDb = fs.initializeFirestore(app, {
+          ignoreUndefinedProperties: true,
+        });
+      } catch {
+        _cachedDb = fs.getFirestore(app);
+      }
+      setFirebaseDb(_cachedDb);
+    }
+    return { fs, db: _cachedDb };
   } catch (err) {
-    console.warn('Could not load firestore module:', err);
+    console.error('[SSO Firestore] Failed to initialize Firestore module:', err);
     return null;
   }
 }
@@ -200,13 +223,14 @@ export async function saveUserProfile(user: SSOUser): Promise<void> {
     try {
       const { fs, db } = f;
       const userRef = fs.doc(db, 'users', user.uid);
-      await fs.setDoc(userRef, {
+      const dataToSave = cleanData({
         ...user,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+        updatedAt: new Date().toISOString(),
+      });
+      await fs.setDoc(userRef, dataToSave, { merge: true });
       return;
     } catch (e) {
-      console.warn('Firestore saveUserProfile failed, falling back to local store', e);
+      console.error('[SSO Firestore] saveUserProfile failed, falling back to local store:', e);
     }
   }
 
@@ -378,10 +402,10 @@ export async function saveRole(role: SSORole): Promise<void> {
   if (f) {
     try {
       const { fs, db } = f;
-      await fs.setDoc(fs.doc(db, 'roles', role.id), role, { merge: true });
+      await fs.setDoc(fs.doc(db, 'roles', role.id), cleanData(role as unknown as Record<string, unknown>), { merge: true });
       return;
     } catch (e) {
-      console.warn('Firestore saveRole fallback', e);
+      console.error('[SSO Firestore] saveRole failed, fallback to local store:', e);
     }
   }
 
@@ -435,10 +459,10 @@ export async function savePermission(perm: SSOPermission): Promise<void> {
   if (f) {
     try {
       const { fs, db } = f;
-      await fs.setDoc(fs.doc(db, 'permissions', perm.id), perm, { merge: true });
+      await fs.setDoc(fs.doc(db, 'permissions', perm.id), cleanData(perm as unknown as Record<string, unknown>), { merge: true });
       return;
     } catch (e) {
-      console.warn('Firestore savePermission fallback', e);
+      console.error('[SSO Firestore] savePermission failed, fallback to local store:', e);
     }
   }
 
@@ -460,7 +484,7 @@ export async function deletePermission(permId: string): Promise<void> {
       await fs.deleteDoc(fs.doc(db, 'permissions', permId));
       return;
     } catch (e) {
-      console.warn('Firestore deletePermission fallback', e);
+      console.error('[SSO Firestore] deletePermission fallback:', e);
     }
   }
 
@@ -500,10 +524,10 @@ export async function saveRegisteredApp(appData: RegisteredApp): Promise<void> {
   if (f) {
     try {
       const { fs, db } = f;
-      await fs.setDoc(fs.doc(db, 'apps', appData.id), appData, { merge: true });
+      await fs.setDoc(fs.doc(db, 'apps', appData.id), cleanData(appData as unknown as Record<string, unknown>), { merge: true });
       return;
     } catch (e) {
-      console.warn('Firestore saveRegisteredApp fallback', e);
+      console.error('[SSO Firestore] saveRegisteredApp failed, fallback to local store:', e);
     }
   }
 
@@ -561,10 +585,10 @@ export async function saveSSOSettings(settings: SSOSettings): Promise<void> {
   if (f) {
     try {
       const { fs, db } = f;
-      await fs.setDoc(fs.doc(db, 'settings', 'sso'), updated, { merge: true });
+      await fs.setDoc(fs.doc(db, 'settings', 'sso'), cleanData(updated as unknown as Record<string, unknown>), { merge: true });
       return;
     } catch (e) {
-      console.warn('Firestore saveSSOSettings fallback', e);
+      console.error('[SSO Firestore] saveSSOSettings failed, fallback to local store:', e);
     }
   }
 
@@ -593,9 +617,9 @@ export async function logSSOEvent(
   if (f) {
     try {
       const { fs, db } = f;
-      await fs.setDoc(fs.doc(db, 'audit_logs', logItem.id), logItem);
+      await fs.setDoc(fs.doc(db, 'audit_logs', logItem.id), cleanData(logItem as unknown as Record<string, unknown>));
     } catch (e) {
-      console.warn('Firestore logSSOEvent fallback', e);
+      console.error('[SSO Firestore] logSSOEvent failed, fallback to local store:', e);
     }
   }
 
