@@ -10,26 +10,11 @@ import { consumeStoredAuthCode } from '../authorize/route';
 
 export const runtime = 'nodejs';
 
-function getCorsHeaders(request: NextRequest): Record<string, string> {
-  const origin = request.headers.get('origin') || '*';
-  return {
-    'Access-Control-Allow-Origin': origin === 'null' ? '*' : origin,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Accept',
-    'Access-Control-Max-Age': '86400',
-  };
-}
-
-export async function OPTIONS(request: NextRequest) {
-  return new NextResponse(null, {
-    status: 204,
-    headers: getCorsHeaders(request),
-  });
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204 });
 }
 
 export async function POST(request: NextRequest) {
-  const corsHeaders = getCorsHeaders(request);
-
   try {
     let body: Record<string, string> = {};
     const contentType = request.headers.get('content-type') || '';
@@ -90,7 +75,7 @@ export async function POST(request: NextRequest) {
     if (!client_id || !code) {
       return NextResponse.json(
         { error: 'invalid_request', error_description: 'client_id and code are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400 }
       );
     }
 
@@ -99,7 +84,7 @@ export async function POST(request: NextRequest) {
     if (!app) {
       return NextResponse.json(
         { error: 'invalid_client', error_description: 'Registered app not found or inactive' },
-        { status: 401, headers: corsHeaders }
+        { status: 401 }
       );
     }
 
@@ -107,7 +92,7 @@ export async function POST(request: NextRequest) {
     if (app.clientSecret && client_secret && app.clientSecret.trim() !== client_secret.trim()) {
       return NextResponse.json(
         { error: 'invalid_client', error_description: 'Invalid client_secret' },
-        { status: 401, headers: corsHeaders }
+        { status: 401 }
       );
     }
 
@@ -148,7 +133,7 @@ export async function POST(request: NextRequest) {
     if (!authData) {
       return NextResponse.json(
         { error: 'invalid_grant', error_description: 'Authorization code is invalid or has expired' },
-        { status: 400, headers: corsHeaders }
+        { status: 400 }
       );
     }
 
@@ -193,27 +178,21 @@ export async function POST(request: NextRequest) {
       title: userProfile?.title || '',
     };
 
-    return NextResponse.json(
-      {
-        access_token: accessToken,
-        token: accessToken,
-        id_token: idToken,
-        token_type: 'Bearer',
-        expires_in: 86400, // 24 hours
-        scope: 'openid profile email',
-        user: userPayload,
-        data: userPayload,
-      },
-      {
-        status: 200,
-        headers: corsHeaders,
-      }
-    );
+    return NextResponse.json({
+      access_token: accessToken,
+      token: accessToken,
+      id_token: idToken,
+      token_type: 'Bearer',
+      expires_in: 86400, // 24 hours
+      scope: 'openid profile email',
+      user: userPayload,
+      data: userPayload,
+    }, { status: 200 });
   } catch (error) {
     console.error('OAuth token exchange error:', error);
     return NextResponse.json(
       { error: 'server_error', error_description: 'Internal SSO token exchange failure' },
-      { status: 500, headers: corsHeaders }
+      { status: 500 }
     );
   }
 }
