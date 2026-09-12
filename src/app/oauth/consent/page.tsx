@@ -164,8 +164,8 @@ function ConsentContent() {
   };
 
   const handleSwitchAccount = async () => {
-    await logout();
     const currentUrl = window.location.pathname + window.location.search;
+    await logout();
     router.push(`/auth/login?redirect=${encodeURIComponent(currentUrl)}`);
   };
 

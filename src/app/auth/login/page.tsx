@@ -1,25 +1,35 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { ShieldCheck, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { resolveOAuthRedirect, buildAuthLink } from '@/lib/auth/oauth-flow';
+import { getAppByClientId } from '@/lib/services/firestore-service';
+import { RegisteredApp } from '@/types/sso';
+import { ShieldCheck, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Sparkles, AppWindow } from 'lucide-react';
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login } = useAuth();
 
-  const clientId = searchParams.get('client_id');
-  const redirectUri = searchParams.get('redirect_uri');
-  const state = searchParams.get('state');
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [targetApp, setTargetApp] = useState<RegisteredApp | null>(null);
+
+  const redirectInfo = resolveOAuthRedirect(searchParams);
+
+  useEffect(() => {
+    if (redirectInfo.clientId) {
+      getAppByClientId(redirectInfo.clientId)
+        .then((app) => setTargetApp(app))
+        .catch(() => setTargetApp(null));
+    }
+  }, [redirectInfo.clientId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,13 +43,8 @@ function LoginForm() {
       setError(null);
       await login(email, password);
 
-      // Handle SSO OAuth redirect if parameters are provided
-      if (clientId && redirectUri) {
-        const authorizeUrl = `/api/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
-        router.push(authorizeUrl);
-      } else {
-        router.push('/profile');
-      }
+      // Seamlessly redirect to the consent screen or target URL
+      router.push(redirectInfo.targetUrl);
     } catch (err: unknown) {
       console.error('Login error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Gagal masuk. Periksa kembali email dan kata sandi Anda.';
@@ -63,25 +68,45 @@ function LoginForm() {
     <div className="min-h-screen flex flex-col justify-center items-center bg-slate-50 px-4 py-12">
       <div className="w-full max-w-md">
         {/* Brand Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm mb-3">
             <ShieldCheck className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">TEN Single Sign-On</h1>
           <p className="mt-1 text-xs text-slate-500">
-            {clientId ? (
-              <span className="text-blue-600 font-medium">Otorisasi akun untuk aplikasi: {clientId}</span>
-            ) : (
-              'Satu akun untuk mengakses seluruh ekosistem aplikasi TEN-MY-ID'
-            )}
+            Satu akun untuk mengakses seluruh ekosistem aplikasi TEN-MY-ID
           </p>
         </div>
+
+        {/* SSO Target Application Alert Banner if during SSO */}
+        {redirectInfo.isSSOFlow && (
+          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/80 p-3.5 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-sm shrink-0 shadow-xs">
+              <AppWindow className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-bold text-slate-900 truncate">
+                  {targetApp?.name || redirectInfo.clientId || 'Aplikasi Mitra'}
+                </p>
+                <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-medium">SSO</span>
+              </div>
+              <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                Masuk untuk melanjutkan otorisasi akses aplikasi ini
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Login Card */}
         <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-xs">
           <div className="mb-6">
             <h2 className="text-lg font-semibold text-slate-900">Masuk ke Akun</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Masukkan kredensial akun SSO terpusat Anda</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {redirectInfo.isSSOFlow
+                ? 'Gunakan akun TEN Anda untuk mengotorisasi aplikasi'
+                : 'Masukkan kredensial akun SSO terpusat Anda'}
+            </p>
           </div>
 
           {error && (
@@ -115,7 +140,7 @@ function LoginForm() {
                   Kata Sandi
                 </label>
                 <Link
-                  href="/auth/forgot-password"
+                  href={buildAuthLink('/auth/forgot-password', searchParams)}
                   className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
                 >
                   Lupa kata sandi?
@@ -185,7 +210,7 @@ function LoginForm() {
         {/* Register footer link */}
         <p className="mt-6 text-center text-xs text-slate-500">
           Belum memiliki akun SSO?{' '}
-          <Link href="/auth/register" className="font-semibold text-blue-600 hover:underline">
+          <Link href={buildAuthLink('/auth/register', searchParams)} className="font-semibold text-blue-600 hover:underline">
             Daftar Akun Baru
           </Link>
         </p>

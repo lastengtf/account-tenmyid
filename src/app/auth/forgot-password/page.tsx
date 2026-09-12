@@ -1,11 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { buildAuthLink } from '@/lib/auth/oauth-flow';
 import { ShieldCheck, Mail, ArrowLeft, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-export default function ForgotPasswordPage() {
+function ForgotPasswordContent() {
+  const searchParams = useSearchParams();
   const { forgotPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -60,7 +63,7 @@ export default function ForgotPasswordPage() {
               </p>
               <div className="mt-6 pt-4 border-t border-slate-100">
                 <Link
-                  href="/auth/login"
+                  href={buildAuthLink('/auth/login', searchParams)}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
@@ -120,7 +123,7 @@ export default function ForgotPasswordPage() {
 
               <div className="mt-6 pt-4 border-t border-slate-100 text-center">
                 <Link
-                  href="/auth/login"
+                  href={buildAuthLink('/auth/login', searchParams)}
                   className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
@@ -132,5 +135,13 @@ export default function ForgotPasswordPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ForgotPasswordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-xs text-slate-400">Memuat...</div>}>
+      <ForgotPasswordContent />
+    </Suspense>
   );
 }

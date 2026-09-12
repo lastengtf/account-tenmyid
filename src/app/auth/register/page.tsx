@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { isUsernameAvailable } from '@/lib/services/firestore-service';
+import { resolveOAuthRedirect, buildAuthLink } from '@/lib/auth/oauth-flow';
+import { isUsernameAvailable, getAppByClientId } from '@/lib/services/firestore-service';
+import { RegisteredApp } from '@/types/sso';
 import { 
   ShieldCheck, 
   Mail, 
@@ -15,14 +17,16 @@ import {
   ArrowRight, 
   AlertCircle, 
   CheckCircle2, 
-  AtSign,
-  Loader2,
-  Check,
-  XCircle
+  AtSign, 
+  Loader2, 
+  Check, 
+  XCircle,
+  AppWindow
 } from 'lucide-react';
 
-export default function RegisterPage() {
+function RegisterContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { register } = useAuth();
 
   const [fullName, setFullName] = useState('');
@@ -37,6 +41,17 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [targetApp, setTargetApp] = useState<RegisteredApp | null>(null);
+
+  const redirectInfo = resolveOAuthRedirect(searchParams);
+
+  useEffect(() => {
+    if (redirectInfo.clientId) {
+      getAppByClientId(redirectInfo.clientId)
+        .then((app) => setTargetApp(app))
+        .catch(() => setTargetApp(null));
+    }
+  }, [redirectInfo.clientId]);
 
   // Debounced real-time username availability check
   useEffect(() => {
@@ -126,7 +141,7 @@ export default function RegisterPage() {
       await register(email, password, fullName, cleanUser);
       setSuccess(true);
       setTimeout(() => {
-        router.push('/profile');
+        router.push(redirectInfo.targetUrl);
       }, 1000);
     } catch (err: unknown) {
       console.error('Registration error:', err);
@@ -141,15 +156,35 @@ export default function RegisterPage() {
     <div className="min-h-screen flex flex-col justify-center items-center bg-slate-50 px-4 py-12">
       <div className="w-full max-w-md">
         {/* Brand Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm mb-3">
             <ShieldCheck className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Buat Akun SSO TEN</h1>
           <p className="mt-1 text-xs text-slate-500">
-            Daftarkan identitas tunggal Anda untuk mengakses semua aplikasi
+            Daftarkan identitas tunggal Anda untuk mengakses seluruh ekosistem aplikasi
           </p>
         </div>
+
+        {/* SSO Target Application Alert Banner if during SSO */}
+        {redirectInfo.isSSOFlow && (
+          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/80 p-3.5 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white font-bold text-sm shrink-0 shadow-xs">
+              <AppWindow className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-bold text-slate-900 truncate">
+                  {targetApp?.name || redirectInfo.clientId || 'Aplikasi Mitra'}
+                </p>
+                <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-medium">SSO</span>
+              </div>
+              <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                Setelah mendaftar, Anda akan otomatis diarahkan ke persetujuan otorisasi
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Register Card */}
         <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-xs">
@@ -168,7 +203,11 @@ export default function RegisterPage() {
           {success && (
             <div className="mb-5 flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50/80 p-3 text-xs text-emerald-700">
               <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Pendaftaran berhasil! Mengalihkan ke profil Anda...</span>
+              <span>
+                {redirectInfo.isSSOFlow
+                  ? 'Pendaftaran berhasil! Mengalihkan ke persetujuan SSO...'
+                  : 'Pendaftaran berhasil! Mengalihkan ke profil Anda...'}
+              </span>
             </div>
           )}
 
@@ -340,11 +379,19 @@ export default function RegisterPage() {
         {/* Login redirect link */}
         <p className="mt-6 text-center text-xs text-slate-500">
           Sudah punya akun SSO?{' '}
-          <Link href="/auth/login" className="font-semibold text-blue-600 hover:underline">
+          <Link href={buildAuthLink('/auth/login', searchParams)} className="font-semibold text-blue-600 hover:underline">
             Masuk di sini
           </Link>
         </p>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-xs text-slate-400">Memuat...</div>}>
+      <RegisterContent />
+    </Suspense>
   );
 }
