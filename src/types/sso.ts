@@ -7,6 +7,7 @@ export interface SSOUser {
   displayName: string;
   photoURL?: string;
   role: string;
+  roleId?: string;
   status: 'active' | 'suspended' | 'pending';
   emailVerified: boolean;
   phoneNumber?: string;

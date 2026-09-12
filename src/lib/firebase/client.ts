@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import type { Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'demo-api-key',
@@ -17,20 +17,72 @@ export const isFirebaseConfigured = (): boolean => {
   return Boolean(key && !key.includes('DemoKey') && key !== 'demo-api-key');
 };
 
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
+let _app: FirebaseApp | undefined;
+let _auth: Auth | undefined;
+let _db: Firestore | undefined;
 
-try {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (error) {
-  console.warn('Firebase initialization notice:', error);
-  // Fallback initialization
-  app = !getApps().length ? initializeApp(firebaseConfig, 'SSO_FALLBACK') : getApp('SSO_FALLBACK');
-  auth = getAuth(app);
-  db = getFirestore(app);
+export function getFirebaseApp(): FirebaseApp {
+  if (!_app) {
+    try {
+      _app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+    } catch {
+      _app = !getApps().length ? initializeApp(firebaseConfig, 'SSO_FALLBACK') : getApp('SSO_FALLBACK');
+    }
+  }
+  return _app;
 }
 
-export { app, auth, db };
+export function getFirebaseAuth(): Auth {
+  if (!_auth) {
+    _auth = getAuth(getFirebaseApp());
+  }
+  return _auth;
+}
+
+export function getFirebaseDb(): Firestore | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  if (!_db) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getFirestore } = require('firebase/firestore');
+      _db = getFirestore(getFirebaseApp());
+    } catch (err) {
+      console.warn('Failed to load firestore on client:', err);
+      return null;
+    }
+  }
+  return _db || null;
+}
+
+// Proxies to allow existing code importing { app, auth, db } to work transparently without eager SSR initialization
+export const app = new Proxy({} as FirebaseApp, {
+  get(_target, prop) {
+    const instance = getFirebaseApp();
+    const val = (instance as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof val === 'function' ? val.bind(instance) : val;
+  },
+});
+
+export const auth = new Proxy({} as Auth, {
+  get(_target, prop) {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    const instance = getFirebaseAuth();
+    const val = (instance as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof val === 'function' ? val.bind(instance) : val;
+  },
+});
+
+export const db = new Proxy({} as Firestore, {
+  get(_target, prop) {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    const instance = getFirebaseDb();
+    const val = (instance as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof val === 'function' ? val.bind(instance) : val;
+  },
+});

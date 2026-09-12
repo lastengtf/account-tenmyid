@@ -1,30 +1,31 @@
-import { db, isFirebaseConfigured } from '@/lib/firebase/client';
-import { 
-  collection, 
-  doc, 
-  getDoc, 
-  getDocs, 
-  setDoc, 
-  updateDoc, 
-  deleteDoc, 
-  query, 
-  orderBy, 
-  where,
-  limit,
-  serverTimestamp 
-} from 'firebase/firestore';
+import { getFirebaseDb, isFirebaseConfigured } from '@/lib/firebase/client';
 import { 
   SSOUser, 
   SSORole, 
   SSOPermission, 
   RegisteredApp, 
   SSOSettings, 
-  SSOAuditLog,
-  AuthorizationCode 
+  SSOAuditLog 
 } from '@/types/sso';
 
 // In-Memory & LocalStorage Cache fallback for zero-config offline or dev testing
 const LOCAL_STORAGE_KEY_PREFIX = 'sso_ten_';
+
+// Lazy loader for Firestore to ensure zero eval/codegen errors in Cloudflare Workers workerd runtime
+async function getFirestoreModule() {
+  if (typeof window === 'undefined' || !isFirebaseConfigured()) {
+    return null;
+  }
+  try {
+    const fs = await import('firebase/firestore');
+    const db = getFirebaseDb();
+    if (!db) return null;
+    return { fs, db };
+  } catch (err) {
+    console.warn('Could not load firestore module:', err);
+    return null;
+  }
+}
 
 const defaultPermissions: SSOPermission[] = [
   { id: 'perm-1', key: 'users.read', name: 'View Users', category: 'users', description: 'Can view list of users and profiles' },
@@ -99,6 +100,18 @@ const defaultApps: RegisteredApp[] = [
     isActive: true,
     allowedScopes: ['openid', 'profile', 'email'],
     createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'app-community',
+    name: 'Komunitas & Relawan TEN',
+    description: 'Volunteer & community membership portal',
+    clientId: 'ten_community_847192038d',
+    clientSecret: 'sec_live_44ef91a27b880c55d9e33f2a1b',
+    redirectUris: ['https://komunitas.ten.my.id/auth/sso/callback'],
+    logoUrl: '',
+    isActive: true,
+    allowedScopes: ['openid', 'profile', 'email'],
+    createdAt: new Date().toISOString(),
   }
 ];
 
@@ -141,18 +154,20 @@ export async function getUserProfile(identifier: string): Promise<SSOUser | null
   const decoded = decodeURIComponent(identifier || '');
   const clean = decoded.replace(/^@/, '').toLowerCase().trim();
 
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
+      const { fs, db } = f;
       // First try by direct document ID (uid)
-      const userRef = doc(db, 'users', decoded);
-      const snap = await getDoc(userRef);
+      const userRef = fs.doc(db, 'users', decoded);
+      const snap = await fs.getDoc(userRef);
       if (snap.exists()) {
         return snap.data() as SSOUser;
       }
 
       // Try by username query
-      const q = query(collection(db, 'users'), where('username', '==', clean), limit(1));
-      const querySnap = await getDocs(q);
+      const q = fs.query(fs.collection(db, 'users'), fs.where('username', '==', clean), fs.limit(1));
+      const querySnap = await fs.getDocs(q);
       if (!querySnap.empty) {
         return querySnap.docs[0].data() as SSOUser;
       }
@@ -180,10 +195,12 @@ export async function isUsernameAvailable(username: string, excludeUid?: string)
 }
 
 export async function saveUserProfile(user: SSOUser): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const userRef = doc(db, 'users', user.uid);
-      await setDoc(userRef, {
+      const { fs, db } = f;
+      const userRef = fs.doc(db, 'users', user.uid);
+      await fs.setDoc(userRef, {
         ...user,
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -204,9 +221,11 @@ export async function saveUserProfile(user: SSOUser): Promise<void> {
 }
 
 export async function listAllUsers(): Promise<SSOUser[]> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const snap = await getDocs(collection(db, 'users'));
+      const { fs, db } = f;
+      const snap = await fs.getDocs(fs.collection(db, 'users'));
       if (!snap.empty) {
         return snap.docs.map(d => d.data() as SSOUser);
       }
@@ -218,66 +237,134 @@ export async function listAllUsers(): Promise<SSOUser[]> {
   let users = getLocalItem<SSOUser[]>('users', []);
   if (users.length === 0 || !users[0]?.username) {
     // Seed default admin user for initial view with unique usernames
-    const initialAdmin: SSOUser = {
-      uid: 'usr_admin_root',
-      username: 'admin',
-      email: 'admin@ten.my.id',
-      displayName: 'Administrator TEN',
-      role: 'Superadmin',
-      status: 'active',
-      emailVerified: true,
-      company: 'TEN-MY-ID Non-Profit',
-      title: 'Head of Infrastructure',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-    };
-    const initialMember: SSOUser = {
-      uid: 'usr_demo_user',
-      username: 'ahmad',
-      email: 'user@ten.my.id',
-      displayName: 'Ahmad Ten',
-      role: 'Member',
-      status: 'active',
-      emailVerified: true,
-      company: 'TEN Community',
-      title: 'Digital Contributor',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-    };
-    users = [initialAdmin, initialMember];
+    users = [
+      {
+        uid: 'usr_admin_root',
+        username: 'admin',
+        email: 'admin@ten.my.id',
+        displayName: 'Administrator TEN',
+        role: 'Superadmin',
+        roleId: 'role-superadmin',
+        status: 'active',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: new Date().toISOString(),
+      },
+      {
+        uid: 'usr_budi_santoso',
+        username: 'budisantoso',
+        email: 'budi@ten.my.id',
+        displayName: 'Budi Santoso',
+        role: 'Admin',
+        roleId: 'role-admin',
+        status: 'active',
+        emailVerified: true,
+        createdAt: '2026-02-15T08:30:00.000Z',
+        updatedAt: '2026-02-15T08:30:00.000Z',
+        lastLoginAt: '2026-03-10T14:20:00.000Z',
+      },
+      {
+        uid: 'usr_siti_rahma',
+        username: 'sitirahma',
+        email: 'siti@ten.my.id',
+        displayName: 'Siti Rahma',
+        role: 'Member',
+        roleId: 'role-member',
+        status: 'active',
+        emailVerified: true,
+        createdAt: '2026-03-01T11:00:00.000Z',
+        updatedAt: '2026-03-01T11:00:00.000Z',
+        lastLoginAt: '2026-03-11T09:15:00.000Z',
+      }
+    ];
     setLocalItem('users', users);
   }
   return users;
 }
 
 export async function deleteUserProfile(uid: string): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await deleteDoc(doc(db, 'users', uid));
+      const { fs, db } = f;
+      await fs.deleteDoc(fs.doc(db, 'users', uid));
       return;
     } catch (e) {
       console.warn('Firestore deleteUserProfile fallback', e);
     }
   }
 
-  const users = getLocalItem<SSOUser[]>('users', []).filter((u) => u.uid !== uid);
-  setLocalItem('users', users);
+  const users = await listAllUsers();
+  const filtered = users.filter(u => u.uid !== uid);
+  setLocalItem('users', filtered);
+}
+
+export const listRoles = getRoles;
+export const listPermissions = getPermissions;
+
+export async function updateUserRole(uid: string, roleName: string, roleId: string): Promise<void> {
+  const f = await getFirestoreModule();
+  if (f) {
+    try {
+      const { fs, db } = f;
+      await fs.updateDoc(fs.doc(db, 'users', uid), {
+        role: roleName,
+        roleId: roleId,
+        updatedAt: new Date().toISOString()
+      });
+      return;
+    } catch (e) {
+      console.warn('Firestore updateUserRole fallback', e);
+    }
+  }
+
+  const users = await listAllUsers();
+  const idx = users.findIndex(u => u.uid === uid);
+  if (idx >= 0) {
+    users[idx].role = roleName;
+    users[idx].roleId = roleId;
+    setLocalItem('users', users);
+  }
+}
+
+export async function updateUserStatus(uid: string, status: 'active' | 'suspended' | 'pending'): Promise<void> {
+  const f = await getFirestoreModule();
+  if (f) {
+    try {
+      const { fs, db } = f;
+      await fs.updateDoc(fs.doc(db, 'users', uid), {
+        status,
+        updatedAt: new Date().toISOString()
+      });
+      return;
+    } catch (e) {
+      console.warn('Firestore updateUserStatus fallback', e);
+    }
+  }
+
+  const users = await listAllUsers();
+  const idx = users.findIndex(u => u.uid === uid);
+  if (idx >= 0) {
+    users[idx].status = status;
+    setLocalItem('users', users);
+  }
 }
 
 // ----------------------------------------------------
-// ROLES & PERMISSIONS
+// ROLES & PERMISSIONS REPOSITORY
 // ----------------------------------------------------
-export async function listRoles(): Promise<SSORole[]> {
-  if (isFirebaseConfigured()) {
+export async function getRoles(): Promise<SSORole[]> {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const snap = await getDocs(collection(db, 'roles'));
+      const { fs, db } = f;
+      const snap = await fs.getDocs(fs.collection(db, 'roles'));
       if (!snap.empty) {
         return snap.docs.map(d => d.data() as SSORole);
       }
     } catch (e) {
-      console.warn('Firestore listRoles fallback', e);
+      console.warn('Firestore getRoles fallback', e);
     }
   }
 
@@ -287,9 +374,11 @@ export async function listRoles(): Promise<SSORole[]> {
 }
 
 export async function saveRole(role: SSORole): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await setDoc(doc(db, 'roles', role.id), role, { merge: true });
+      const { fs, db } = f;
+      await fs.setDoc(fs.doc(db, 'roles', role.id), role, { merge: true });
       return;
     } catch (e) {
       console.warn('Firestore saveRole fallback', e);
@@ -299,7 +388,7 @@ export async function saveRole(role: SSORole): Promise<void> {
   const roles = getLocalItem<SSORole[]>('roles', defaultRoles);
   const idx = roles.findIndex(r => r.id === role.id);
   if (idx >= 0) {
-    roles[idx] = { ...roles[idx], ...role, updatedAt: new Date().toISOString() };
+    roles[idx] = role;
   } else {
     roles.push(role);
   }
@@ -307,9 +396,11 @@ export async function saveRole(role: SSORole): Promise<void> {
 }
 
 export async function deleteRole(roleId: string): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await deleteDoc(doc(db, 'roles', roleId));
+      const { fs, db } = f;
+      await fs.deleteDoc(fs.doc(db, 'roles', roleId));
       return;
     } catch (e) {
       console.warn('Firestore deleteRole fallback', e);
@@ -320,15 +411,17 @@ export async function deleteRole(roleId: string): Promise<void> {
   setLocalItem('roles', roles);
 }
 
-export async function listPermissions(): Promise<SSOPermission[]> {
-  if (isFirebaseConfigured()) {
+export async function getPermissions(): Promise<SSOPermission[]> {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const snap = await getDocs(collection(db, 'permissions'));
+      const { fs, db } = f;
+      const snap = await fs.getDocs(fs.collection(db, 'permissions'));
       if (!snap.empty) {
         return snap.docs.map(d => d.data() as SSOPermission);
       }
     } catch (e) {
-      console.warn('Firestore listPermissions fallback', e);
+      console.warn('Firestore getPermissions fallback', e);
     }
   }
 
@@ -338,9 +431,11 @@ export async function listPermissions(): Promise<SSOPermission[]> {
 }
 
 export async function savePermission(perm: SSOPermission): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await setDoc(doc(db, 'permissions', perm.id), perm, { merge: true });
+      const { fs, db } = f;
+      await fs.setDoc(fs.doc(db, 'permissions', perm.id), perm, { merge: true });
       return;
     } catch (e) {
       console.warn('Firestore savePermission fallback', e);
@@ -349,15 +444,20 @@ export async function savePermission(perm: SSOPermission): Promise<void> {
 
   const perms = getLocalItem<SSOPermission[]>('permissions', defaultPermissions);
   const idx = perms.findIndex(p => p.id === perm.id);
-  if (idx >= 0) perms[idx] = perm;
-  else perms.push(perm);
+  if (idx >= 0) {
+    perms[idx] = perm;
+  } else {
+    perms.push(perm);
+  }
   setLocalItem('permissions', perms);
 }
 
 export async function deletePermission(permId: string): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await deleteDoc(doc(db, 'permissions', permId));
+      const { fs, db } = f;
+      await fs.deleteDoc(fs.doc(db, 'permissions', permId));
       return;
     } catch (e) {
       console.warn('Firestore deletePermission fallback', e);
@@ -369,12 +469,14 @@ export async function deletePermission(permId: string): Promise<void> {
 }
 
 // ----------------------------------------------------
-// REGISTERED APPS (OAUTH CLIENTS)
+// REGISTERED OAUTH APPS REPOSITORY
 // ----------------------------------------------------
 export async function listRegisteredApps(): Promise<RegisteredApp[]> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const snap = await getDocs(collection(db, 'apps'));
+      const { fs, db } = f;
+      const snap = await fs.getDocs(fs.collection(db, 'apps'));
       if (!snap.empty) {
         return snap.docs.map(d => d.data() as RegisteredApp);
       }
@@ -394,9 +496,11 @@ export async function getAppByClientId(clientId: string): Promise<RegisteredApp 
 }
 
 export async function saveRegisteredApp(appData: RegisteredApp): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await setDoc(doc(db, 'apps', appData.id), appData, { merge: true });
+      const { fs, db } = f;
+      await fs.setDoc(fs.doc(db, 'apps', appData.id), appData, { merge: true });
       return;
     } catch (e) {
       console.warn('Firestore saveRegisteredApp fallback', e);
@@ -414,9 +518,11 @@ export async function saveRegisteredApp(appData: RegisteredApp): Promise<void> {
 }
 
 export async function deleteRegisteredApp(appId: string): Promise<void> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await deleteDoc(doc(db, 'apps', appId));
+      const { fs, db } = f;
+      await fs.deleteDoc(fs.doc(db, 'apps', appId));
       return;
     } catch (e) {
       console.warn('Firestore deleteRegisteredApp fallback', e);
@@ -431,9 +537,11 @@ export async function deleteRegisteredApp(appId: string): Promise<void> {
 // SETTINGS REPOSITORY
 // ----------------------------------------------------
 export async function getSSOSettings(): Promise<SSOSettings> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const snap = await getDoc(doc(db, 'settings', 'sso'));
+      const { fs, db } = f;
+      const snap = await fs.getDoc(fs.doc(db, 'settings', 'sso'));
       if (snap.exists()) {
         return snap.data() as SSOSettings;
       }
@@ -449,9 +557,11 @@ export async function getSSOSettings(): Promise<SSOSettings> {
 
 export async function saveSSOSettings(settings: SSOSettings): Promise<void> {
   const updated = { ...settings, updatedAt: new Date().toISOString() };
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await setDoc(doc(db, 'settings', 'sso'), updated, { merge: true });
+      const { fs, db } = f;
+      await fs.setDoc(fs.doc(db, 'settings', 'sso'), updated, { merge: true });
       return;
     } catch (e) {
       console.warn('Firestore saveSSOSettings fallback', e);
@@ -479,9 +589,11 @@ export async function logSSOEvent(
     timestamp: new Date().toISOString(),
   };
 
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      await setDoc(doc(db, 'audit_logs', logItem.id), logItem);
+      const { fs, db } = f;
+      await fs.setDoc(fs.doc(db, 'audit_logs', logItem.id), logItem);
     } catch (e) {
       console.warn('Firestore logSSOEvent fallback', e);
     }
@@ -494,10 +606,12 @@ export async function logSSOEvent(
 }
 
 export async function getRecentAuditLogs(count: number = 20): Promise<SSOAuditLog[]> {
-  if (isFirebaseConfigured()) {
+  const f = await getFirestoreModule();
+  if (f) {
     try {
-      const q = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(count));
-      const snap = await getDocs(q);
+      const { fs, db } = f;
+      const q = fs.query(fs.collection(db, 'audit_logs'), fs.orderBy('timestamp', 'desc'), fs.limit(count));
+      const snap = await fs.getDocs(q);
       if (!snap.empty) {
         return snap.docs.map(d => d.data() as SSOAuditLog);
       }
